@@ -6,6 +6,7 @@ import type { ServerAdapterModule } from "../adapters/index.js";
 const mockAgentService = vi.hoisted(() => ({
   create: vi.fn(),
   getById: vi.fn(),
+  update: vi.fn(),
 }));
 
 const mockAccessService = vi.hoisted(() => ({
@@ -226,6 +227,30 @@ describe("agent routes adapter validation", () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     }));
+    mockAgentService.update.mockImplementation(async (_agentId: string, patch: Record<string, unknown>) => ({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Existing Agent",
+      urlKey: "existing-agent",
+      role: "general",
+      title: null,
+      icon: null,
+      status: "idle",
+      reportsTo: null,
+      capabilities: null,
+      adapterType: String(patch.adapterType ?? "claude_local"),
+      adapterConfig: (patch.adapterConfig as Record<string, unknown> | undefined) ?? {},
+      runtimeConfig: (patch.runtimeConfig as Record<string, unknown> | undefined) ?? {},
+      budgetMonthlyCents: 0,
+      spentMonthlyCents: 0,
+      pauseReason: null,
+      pausedAt: null,
+      permissions: { canCreateAgents: false },
+      lastHeartbeatAt: null,
+      metadata: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter(missingAdapterType);
   });
@@ -266,5 +291,45 @@ describe("agent routes adapter validation", () => {
 
     expect(res.status, JSON.stringify(res.body)).toBe(422);
     expect(String(res.body.error ?? res.body.message ?? "")).toContain(`Unknown adapter type: ${missingAdapterType}`);
+  });
+
+  it("preserves fallback chain blocks when patch changes adapter type", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+      companyId: "company-1",
+      name: "Existing Agent",
+      role: "general",
+      status: "idle",
+      adapterType: "claude_local",
+      adapterConfig: {
+        model: "claude-sonnet-4-6",
+        fallback_chain: [{ adapterType: "codex_local", model: "gpt-5.3-codex" }],
+        routing: { fallback_chain: [{ provider: "chatgpt", tier: "subscription" }] },
+        env: { KEEP_ME: { type: "plain", value: "1" } },
+      },
+      runtimeConfig: {},
+      permissions: { canCreateAgents: false },
+    });
+
+    const app = await createApp();
+    const res = await requestApp(app, (baseUrl) =>
+      request(baseUrl)
+        .patch("/api/agents/11111111-1111-4111-8111-111111111111")
+        .send({
+          adapterType: "codex_local",
+          adapterConfig: { model: "gpt-5.3-codex" },
+        }),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockAgentService.update).toHaveBeenCalledTimes(1);
+    const updatePayload = mockAgentService.update.mock.calls[0]?.[1] as Record<string, unknown>;
+    const nextAdapterConfig = (updatePayload?.adapterConfig ?? {}) as Record<string, unknown>;
+    expect(nextAdapterConfig.fallback_chain).toEqual([
+      { adapterType: "codex_local", model: "gpt-5.3-codex" },
+    ]);
+    expect(nextAdapterConfig.routing).toEqual({
+      fallback_chain: [{ provider: "chatgpt", tier: "subscription" }],
+    });
   });
 });

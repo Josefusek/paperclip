@@ -2611,6 +2611,9 @@ export function agentRoutes(
         const ADAPTER_AGNOSTIC_KEYS = [
           "env", "cwd", "timeoutSec", "graceSec",
           "promptTemplate", "bootstrapPromptTemplate",
+          // Keep fallback policy blocks across temporary adapter swaps
+          // so claude_local can recover its configured chain after revert.
+          "fallback_chain", "routing", "modelFallback",
         ] as const;
         for (const key of ADAPTER_AGNOSTIC_KEYS) {
           if (rawEffectiveAdapterConfig[key] === undefined && existingAdapterConfig[key] !== undefined) {
