@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inferOpenAiCompatibleBiller, type AdapterExecutionContext, type AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import {
+  inferOpenAiCompatibleBiller,
+  scrubApiFallbackEnv,
+  type AdapterExecutionContext,
+  type AdapterExecutionResult,
+} from "@paperclipai/adapter-utils";
 import {
   adapterExecutionTargetIsRemote,
   adapterExecutionTargetRemoteCwd,
@@ -322,7 +327,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const useConfiguredInsteadOfAgentHome = workspaceSource === "agent_home" && configuredCwd.length > 0;
   const effectiveWorkspaceCwd = useConfiguredInsteadOfAgentHome ? "" : workspaceCwd;
   const cwd = effectiveWorkspaceCwd || configuredCwd || process.cwd();
-  const envConfig = parseObject(config.env);
+  const rawEnvConfig = parseObject(config.env);
+  // NUT-4494 §B: scrub adapter-config env before it influences managed codex
+  // home seeding (which would otherwise wire a real OPENAI_API_KEY into the
+  // child auth file even when subscription mode is the policy).
+  const envConfig = scrubApiFallbackEnv({
+    env: rawEnvConfig as Record<string, string | undefined>,
+    agentId: agent.id,
+    adapterId: "codex_local",
+  }).env as Record<string, unknown>;
   const executionTarget = readAdapterExecutionTarget({
     executionTarget: ctx.executionTarget,
     legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
@@ -499,8 +512,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       Object.assign(env, paperclipBridge.env);
     }
   }
+  // NUT-4494 §B: scrub API-fallback keys (OPENAI_API_KEY, etc.) for
+  // non-backup agents so codex-local cannot silently switch to direct API
+  // billing without explicit board approval.
+  const apiFallbackScrub = scrubApiFallbackEnv({
+    env: { ...process.env, ...env },
+    agentId: agent.id,
+    adapterId: "codex_local",
+  });
+  if (!apiFallbackScrub.whitelisted && apiFallbackScrub.scrubbedKeys.length > 0) {
+    await onLog(
+      "stderr",
+      `[paperclip] api_fallback_blocked agent=${agent.id} adapter=codex_local scrubbed=${apiFallbackScrub.scrubbedKeys.join(",")}\n`,
+    );
+  }
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    Object.entries(apiFallbackScrub.env).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );

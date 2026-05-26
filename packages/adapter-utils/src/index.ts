@@ -62,6 +62,16 @@ export {
 } from "./command-redaction.js";
 export { buildSandboxNpmInstallCommand } from "./sandbox-install-command.js";
 export { inferOpenAiCompatibleBiller } from "./billing.js";
+export {
+  API_FALLBACK_ENV_KEYS,
+  getDefaultApiFallbackBackupAgentIds,
+  scrubApiFallbackEnv,
+} from "./api-fallback-guard.js";
+export type {
+  ApiFallbackEnvKey,
+  ScrubApiFallbackEnvInput,
+  ScrubApiFallbackEnvResult,
+} from "./api-fallback-guard.js";
 // Keep the root adapter-utils entry browser-safe because the UI imports it.
 // The sandbox callback bridge stays available via its dedicated subpath export.
 export type {

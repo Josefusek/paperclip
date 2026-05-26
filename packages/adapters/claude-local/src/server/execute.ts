@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import { scrubApiFallbackEnv } from "@paperclipai/adapter-utils";
 import type { RunProcessResult } from "@paperclipai/adapter-utils/server-utils";
 import {
   adapterExecutionTargetIsRemote,
@@ -269,8 +270,22 @@ async function buildClaudeRuntimeConfig(input: ClaudeExecutionInput): Promise<Cl
     env.PAPERCLIP_API_KEY = authToken;
   }
 
+  // NUT-4494 §B: strip API-fallback keys for non-backup agents before spawn,
+  // so the subscription auth path is the only viable choice. Whitelisted
+  // backup agents (e.g. the AI integration tester) keep their keys.
+  const apiFallbackScrub = scrubApiFallbackEnv({
+    env: ensurePathInEnv({ ...process.env, ...env }),
+    agentId: agent.id,
+    adapterId: "claude_local",
+  });
+  if (!apiFallbackScrub.whitelisted && apiFallbackScrub.scrubbedKeys.length > 0) {
+    await onLog(
+      "stderr",
+      `[paperclip] api_fallback_blocked agent=${agent.id} adapter=claude_local scrubbed=${apiFallbackScrub.scrubbedKeys.join(",")}\n`,
+    );
+  }
   const runtimeEnv = Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+    Object.entries(apiFallbackScrub.env).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
@@ -427,9 +442,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     asNumber(config.terminalResultCleanupGraceMs, 5_000),
   );
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
+    Object.entries(
+      scrubApiFallbackEnv({
+        env: { ...process.env, ...env },
+        agentId: agent.id,
+        adapterId: "claude_local",
+      }).env,
+    ).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
   const billingType = resolveClaudeBillingType(effectiveEnv);
   const claudeSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
@@ -578,7 +597,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
     if (paperclipBridge) {
       Object.assign(env, paperclipBridge.env);
-      const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+      const runtimeEnv = scrubApiFallbackEnv({
+        env: ensurePathInEnv({ ...process.env, ...env }),
+        agentId: agent.id,
+        adapterId: "claude_local",
+      }).env as Record<string, string>;
       loggedEnv = buildInvocationEnvForLogs(env, {
         runtimeEnv,
         includeRuntimeKeys: ["HOME", "CLAUDE_CONFIG_DIR"],
