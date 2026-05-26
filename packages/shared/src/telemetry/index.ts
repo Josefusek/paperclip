@@ -13,6 +13,7 @@ export {
   trackSkillImported,
   trackAgentFirstHeartbeat,
   trackAgentTaskCompleted,
+  trackApiFallbackBlocked,
   trackErrorHandlerCrash,
 } from "./events.js";
 export type {

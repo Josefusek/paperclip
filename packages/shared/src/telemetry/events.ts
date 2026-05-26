@@ -96,3 +96,21 @@ export function trackErrorHandlerCrash(
 ): void {
   client.track("error.handler_crash", { error_code: dims.errorCode });
 }
+
+export function trackApiFallbackBlocked(
+  client: TelemetryClient,
+  dims: {
+    agentId: string;
+    adapterId: string;
+    scrubbedKeys: readonly string[];
+    reason: "key_scrubbed" | "subscription_token_missing";
+  },
+): void {
+  client.track("adapter.api_fallback_blocked", {
+    agent_id: dims.agentId,
+    adapter_id: dims.adapterId,
+    scrubbed_keys: dims.scrubbedKeys.join(","),
+    scrubbed_key_count: dims.scrubbedKeys.length,
+    reason: dims.reason,
+  });
+}

@@ -40,5 +40,6 @@ export type TelemetryEventName =
   | "skill.imported"
   | "agent.first_heartbeat"
   | "agent.task_completed"
+  | "adapter.api_fallback_blocked"
   | "error.handler_crash"
   | `plugin.${string}`;

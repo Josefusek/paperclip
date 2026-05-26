@@ -63,6 +63,11 @@ import { parseObject, asBoolean, asNumber, appendWithByteCap, MAX_EXCERPT_BYTES 
 import { costService } from "./costs.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
+import {
+  ApiFallbackBlockedError,
+  emitApiFallbackTelemetry,
+  evaluateApiFallbackPreflight,
+} from "./api-fallback-preflight.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
@@ -7781,6 +7786,34 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           "local agent jwt secret missing or invalid; running without injected PAPERCLIP_API_KEY",
         );
       }
+
+      // NUT-4494 §B / NUT-4535: pre-spawn API-fallback preflight. Emit a structured
+      // telemetry event whenever subscription-bypassing API keys are stripped, and
+      // refuse to spawn at all when a non-whitelisted agent has no subscription
+      // token for an adapter that requires one (claude_local, codex_local).
+      const apiFallbackPreflight = evaluateApiFallbackPreflight({
+        agentId: agent.id,
+        adapterId: agent.adapterType,
+        env: process.env,
+      });
+      emitApiFallbackTelemetry(getTelemetryClient(), {
+        agentId: agent.id,
+        adapterId: agent.adapterType,
+        result: apiFallbackPreflight,
+      });
+      if (apiFallbackPreflight.shouldBlock) {
+        await onLog(
+          "stderr",
+          `[paperclip] api_fallback_blocked agent=${agent.id} adapter=${agent.adapterType} ` +
+            `reason=subscription_token_missing scrubbed=${apiFallbackPreflight.scrubbedKeys.join(",")}\n`,
+        );
+        throw new ApiFallbackBlockedError({
+          agentId: agent.id,
+          adapterId: agent.adapterType,
+          scrubbedKeys: apiFallbackPreflight.scrubbedKeys,
+        });
+      }
+
       const adapterResult = await adapter.execute({
         runId: run.id,
         agent,
@@ -8079,11 +8112,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       }
       await finalizeAgentStatus(agent.id, outcome);
     } catch (err) {
+      const isApiFallbackBlocked = err instanceof ApiFallbackBlockedError;
+      const adapterErrorCode = isApiFallbackBlocked ? "subscription_token_missing" : "adapter_failed";
       const message = redactCurrentUserText(
         err instanceof Error ? err.message : "Unknown adapter failure",
         await getCurrentUserRedactionOptions(),
       );
-      logger.error({ err, runId }, "heartbeat execution failed");
+      if (isApiFallbackBlocked) {
+        logger.warn(
+          { runId, agentId: agent.id, adapterType: agent.adapterType, scrubbedKeys: err.scrubbedKeys },
+          "heartbeat run blocked: subscription token missing for non-backup agent (NUT-4494 §B)",
+        );
+      } else {
+        logger.error({ err, runId }, "heartbeat execution failed");
+      }
 
       let logSummary: { bytes: number; sha256?: string; compressed: boolean } | null = null;
       if (handle) {
@@ -8103,10 +8145,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
       const failedRun = await setRunStatus(run.id, "failed", {
         error: message,
-        errorCode: "adapter_failed",
+        errorCode: adapterErrorCode,
         finishedAt: new Date(),
         resultJson: mergeRunStopMetadataForAgent(agent, "failed", {
-          errorCode: "adapter_failed",
+          errorCode: adapterErrorCode,
           errorMessage: message,
         }),
         stdoutExcerpt,
@@ -8152,6 +8194,31 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             lastRunId: failedRun.id,
             lastError: message,
           });
+        }
+      }
+
+      // NUT-4494 §B / NUT-4535: when the spawn was refused because no subscription
+      // token is available, directly transition the issue to `blocked` so the board
+      // sees the policy decision instead of an opaque adapter failure.
+      if (isApiFallbackBlocked && issueId) {
+        try {
+          await issuesSvc.update(issueId, { status: "blocked" });
+          await issuesSvc.addComment(
+            issueId,
+            "🔒 **Run blocked: subscription token missing** (NUT-4494 §B / NUT-4535)\n\n" +
+              `Agent \`${agent.id}\` (\`${agent.adapterType}\`) is not on the board-approved API-backup whitelist ` +
+              "and the local subscription session is not available, so the runtime refused to spawn rather than " +
+              "fall back to direct-API auth. Resolve by either logging the host back in to the subscription " +
+              "(`claude login` / `codex login`) or — only if board-approved — adding this agent to the backup " +
+              "whitelist.\n\n" +
+              "Telemetry: `adapter.api_fallback_blocked` reason=`subscription_token_missing`.",
+            { agentId: agent.id, runId: failedRun?.id ?? run.id },
+          );
+        } catch (issueErr) {
+          logger.warn(
+            { err: issueErr, runId, issueId },
+            "failed to transition issue to blocked after api_fallback_blocked",
+          );
         }
       }
 
