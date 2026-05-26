@@ -22,6 +22,7 @@ export const READ_ITEMS_KEY = "paperclip:inbox:read-items";
 export const INBOX_LAST_TAB_KEY = "paperclip:inbox:last-tab";
 export const INBOX_ISSUE_COLUMNS_KEY = "paperclip:inbox:issue-columns";
 export const INBOX_NESTING_KEY = "paperclip:inbox:nesting";
+export const INBOX_HIDE_DONE_KEY = "paperclip:inbox:hide-done";
 export const INBOX_GROUP_BY_KEY = "paperclip:inbox:group-by";
 export const INBOX_FILTER_PREFERENCES_KEY_PREFIX = "paperclip:inbox:filters";
 export const INBOX_COLLAPSED_GROUPS_KEY_PREFIX = "paperclip:inbox:collapsed-groups";
@@ -625,6 +626,22 @@ export function saveInboxNesting(enabled: boolean) {
 
 export function resolveInboxNestingEnabled(preferenceEnabled: boolean, isMobile: boolean): boolean {
   return preferenceEnabled && !isMobile;
+}
+
+export function loadInboxHideDone(): boolean {
+  try {
+    return localStorage.getItem(INBOX_HIDE_DONE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveInboxHideDone(enabled: boolean) {
+  try {
+    localStorage.setItem(INBOX_HIDE_DONE_KEY, String(enabled));
+  } catch {
+    // Ignore localStorage failures.
+  }
 }
 
 export function loadLastInboxTab(): InboxTab {

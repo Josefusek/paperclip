@@ -101,6 +101,7 @@ import {
   UserPlus,
   Search,
   ListTree,
+  EyeOff,
 } from "lucide-react";
 
 const INBOX_HEARTBEAT_RUN_LIMIT = 200;
@@ -129,6 +130,7 @@ import {
   loadCollapsedInboxGroupKeys,
   loadInboxFilterPreferences,
   loadInboxIssueColumns,
+  loadInboxHideDone,
   loadInboxNesting,
   loadInboxWorkItemGroupBy,
   normalizeInboxIssueColumns,
@@ -138,6 +140,7 @@ import {
   resolveInboxSelectionIndex,
   saveInboxFilterPreferences,
   saveCollapsedInboxGroupKeys,
+  saveInboxHideDone,
   saveInboxIssueColumns,
   saveInboxNesting,
   saveInboxWorkItemGroupBy,
@@ -682,6 +685,14 @@ export function Inbox() {
     () => loadInboxFilterPreferences(selectedCompanyId),
   );
   const [groupBy, setGroupBy] = useState<InboxWorkItemGroupBy>(() => loadInboxWorkItemGroupBy());
+  const [hideDoneIssues, setHideDoneIssues] = useState<boolean>(() => loadInboxHideDone());
+  const toggleHideDone = useCallback(() => {
+    setHideDoneIssues((prev) => {
+      const next = !prev;
+      saveInboxHideDone(next);
+      return next;
+    });
+  }, []);
   const [blockedGroupBy, setBlockedGroupBy] = useState<BlockedInboxGroupBy>("none");
   const [blockedSortBy, setBlockedSortBy] = useState<BlockedInboxSort>("most_recent");
   const [visibleIssueColumns, setVisibleIssueColumns] = useState<InboxIssueColumn[]>(loadInboxIssueColumns);
@@ -937,11 +948,13 @@ export function Inbox() {
   }, [agents, currentUserId, mineIssues, touchedIssues]);
   const issuesToRender = useMemo(
     () => {
-      if (tab === "mine") return visibleMineIssues;
-      if (tab === "unread") return unreadTouchedIssues;
-      return visibleTouchedIssues;
+      const base =
+        tab === "mine" ? visibleMineIssues
+        : tab === "unread" ? unreadTouchedIssues
+        : visibleTouchedIssues;
+      return hideDoneIssues ? base.filter((issue) => issue.status !== "done") : base;
     },
-    [tab, visibleMineIssues, visibleTouchedIssues, unreadTouchedIssues],
+    [tab, visibleMineIssues, visibleTouchedIssues, unreadTouchedIssues, hideDoneIssues],
   );
 
   const agentById = useMemo(() => {
@@ -2095,6 +2108,17 @@ export function Inbox() {
               >
                 <ListTree className="h-3.5 w-3.5" />
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className={cn("h-8 w-8 shrink-0", hideDoneIssues && "bg-accent")}
+                onClick={toggleHideDone}
+                title={hideDoneIssues ? "Show done issues" : "Hide done issues"}
+                aria-pressed={hideDoneIssues}
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+              </Button>
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
@@ -2226,7 +2250,7 @@ export function Inbox() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All approval statuses</SelectItem>
-                <SelectItem value="actionable">Needs action</SelectItem>
+                <SelectItem value="actionable">Approval: Needs action</SelectItem>
                 <SelectItem value="resolved">Resolved</SelectItem>
               </SelectContent>
             </Select>
@@ -2315,11 +2339,12 @@ export function Inbox() {
                       issue={issue}
                       issueLinkState={issueLinkState}
                       selected={selected}
-                      className={
+                      className={cn(
                         isArchiving
                           ? "pointer-events-none -translate-x-4 scale-[0.98] opacity-0 transition-all duration-200 ease-out"
-                          : "transition-all duration-200 ease-out"
-                      }
+                          : "transition-all duration-200 ease-out",
+                        issue.status === "done" && !isArchiving && "opacity-60",
+                      )}
                       desktopMetaLeading={
                         <>
                           {nestingEnabled ? (
