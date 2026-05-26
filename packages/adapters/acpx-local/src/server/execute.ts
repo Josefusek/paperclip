@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import { scrubApiFallbackEnv } from "@paperclipai/adapter-utils";
 import { readAdapterExecutionTarget, adapterExecutionTargetSessionIdentity } from "@paperclipai/adapter-utils/execution-target";
 import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
@@ -917,7 +918,12 @@ async function buildRuntime(input: {
   });
   const taskKey = asString(input.ctx.runtime.taskKey, "") || wakeTaskId || workspaceId || "default";
   const sessionKey = `paperclip:${agent.companyId}:${agent.id}:${taskKey}:${fingerprint}`;
-  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  // NUT-4494 §B: scrub API-fallback keys for non-backup agents before spawn.
+  const runtimeEnv = scrubApiFallbackEnv({
+    env: ensurePathInEnv({ ...process.env, ...env }),
+    agentId: agent.id,
+    adapterId: "acpx_local",
+  }).env as Record<string, string>;
   const loggedEnv = buildInvocationEnvForLogs(env, {
     runtimeEnv,
     includeRuntimeKeys: ["HOME"],

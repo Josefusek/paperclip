@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inferOpenAiCompatibleBiller, type AdapterExecutionContext, type AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import {
+  inferOpenAiCompatibleBiller,
+  scrubApiFallbackEnv,
+  type AdapterExecutionContext,
+  type AdapterExecutionResult,
+} from "@paperclipai/adapter-utils";
 import {
   adapterExecutionTargetIsRemote,
   adapterExecutionTargetRemoteCwd,
@@ -433,8 +438,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     env = finalSandboxCommand.env;
   }
   const runtimeExecutionTarget = overrideAdapterExecutionTargetRemoteCwd(executionTarget, effectiveExecutionCwd);
+  // NUT-4494 §B: scrub API-fallback keys for non-backup agents before spawn.
+  const apiFallbackScrub = scrubApiFallbackEnv({
+    env: { ...process.env, ...env },
+    agentId: agent.id,
+    adapterId: "cursor_local",
+  });
+  if (!apiFallbackScrub.whitelisted && apiFallbackScrub.scrubbedKeys.length > 0) {
+    await onLog(
+      "stderr",
+      `[paperclip] api_fallback_blocked agent=${agent.id} adapter=cursor_local scrubbed=${apiFallbackScrub.scrubbedKeys.join(",")}\n`,
+    );
+  }
   const effectiveEnv = Object.fromEntries(
-    Object.entries({ ...process.env, ...env }).filter(
+    Object.entries(apiFallbackScrub.env).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );

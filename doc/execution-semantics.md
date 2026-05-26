@@ -473,3 +473,34 @@ For a board operator, the intended meaning is:
 - blockers explain waiting
 
 That is the execution contract Paperclip should present to operators.
+
+## 14. API-fallback guard for agent spawn
+
+Local adapters (`claude_local`, `codex_local`, `cursor_local`, `gemini_local`,
+`grok_local`, `opencode_local`, `pi_local`, `acpx_local`) auto-detect direct
+API auth by looking for provider keys in the spawn environment
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CURSOR_API_KEY`, `GEMINI_API_KEY`,
+`GROK_API_KEY`, and friends). Without a guard, any agent whose runtime env
+happens to carry one of these keys would silently fall back to direct API
+billing instead of the subscription session the operator configured.
+
+To make subscription auth the policy default, the adapter spawn path runs the
+env through `scrubApiFallbackEnv` (see `@paperclipai/adapter-utils`) right
+before the child process is launched:
+
+- The helper holds an explicit allow-list of agent IDs that are permitted to
+  keep API keys (the default list contains only the API-backup tester agent
+  used for integration smoke runs).
+- For every other agent the helper removes all known API-fallback keys from
+  the merged env, so the adapter's billing-type resolver sees no API key and
+  picks the subscription path. If no subscription session is available, the
+  adapter fails fast with a normal "subscription auth required" error rather
+  than starting a billed API run.
+- When keys are stripped, the adapter writes an `api_fallback_blocked` warn
+  line to the run log so the heartbeat operator can see the policy fired.
+
+The whitelist can be extended per call via `extraBackupAgentIds`; runtime
+deployments that need additional backup identities should plumb that list
+through their own config rather than editing the default set inline. The
+operator-facing policy that drives this list is described in the company's
+`POLICY_LLM_USAGE` document (NUT-4494 §9.7 for the NUTRIADAPT instance).

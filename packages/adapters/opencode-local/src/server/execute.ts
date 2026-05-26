@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inferOpenAiCompatibleBiller, type AdapterExecutionContext, type AdapterExecutionResult } from "@paperclipai/adapter-utils";
+import {
+  inferOpenAiCompatibleBiller,
+  scrubApiFallbackEnv,
+  type AdapterExecutionContext,
+  type AdapterExecutionResult,
+} from "@paperclipai/adapter-utils";
 import {
   adapterExecutionTargetIsRemote,
   adapterExecutionTargetRemoteCwd,
@@ -301,8 +306,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const localRuntimeConfigHome =
     preparedRuntimeConfig.notes.length > 0 ? preparedRuntimeConfig.env.XDG_CONFIG_HOME : "";
   try {
+    // NUT-4494 §B: scrub API-fallback keys for non-backup agents before spawn.
+    const apiFallbackScrub = scrubApiFallbackEnv({
+      env: ensurePathInEnv({ ...process.env, ...preparedRuntimeConfig.env }),
+      agentId: agent.id,
+      adapterId: "opencode_local",
+    });
+    if (!apiFallbackScrub.whitelisted && apiFallbackScrub.scrubbedKeys.length > 0) {
+      await onLog(
+        "stderr",
+        `[paperclip] api_fallback_blocked agent=${agent.id} adapter=opencode_local scrubbed=${apiFallbackScrub.scrubbedKeys.join(",")}\n`,
+      );
+    }
     const runtimeEnv = Object.fromEntries(
-      Object.entries(ensurePathInEnv({ ...process.env, ...preparedRuntimeConfig.env })).filter(
+      Object.entries(apiFallbackScrub.env).filter(
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
