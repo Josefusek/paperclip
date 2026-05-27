@@ -9708,29 +9708,50 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   return {
     list: async (companyId: string, agentId?: string, limit?: number) => {
       const safeForLegacyEncoding = await hasUnsafeTextProjectionDatabase();
-      const query = db
-        .select(
-          safeForLegacyEncoding
-            ? {
-                ...heartbeatRunListColumns,
-                error: sql<string | null>`NULL`.as("error"),
-                ...heartbeatRunListContextColumns,
-              }
-            : {
-                ...heartbeatRunListColumns,
-                ...heartbeatRunListContextColumns,
-                ...heartbeatRunListResultColumns,
-              },
-        )
-        .from(heartbeatRuns)
-        .where(
-          agentId
-            ? and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId))
-            : eq(heartbeatRuns.companyId, companyId),
-        )
-        .orderBy(desc(heartbeatRuns.createdAt));
+      const projection = safeForLegacyEncoding
+        ? {
+            ...heartbeatRunListColumns,
+            error: sql<string | null>`NULL`.as("error"),
+            ...heartbeatRunListContextColumns,
+          }
+        : {
+            ...heartbeatRunListColumns,
+            ...heartbeatRunListContextColumns,
+            ...heartbeatRunListResultColumns,
+          };
+      const whereClause = agentId
+        ? and(eq(heartbeatRuns.companyId, companyId), eq(heartbeatRuns.agentId, agentId))
+        : eq(heartbeatRuns.companyId, companyId);
 
-      const rows = limit ? await query.limit(limit) : await query;
+      // NUT-4770: the projection extracts fields out of large jsonb columns
+      // (context_snapshot / result_json) with `->>`. Postgres evaluates those
+      // target-list expressions in the table scan for *every* matching row
+      // before LIMIT is applied, forcing a full detoast+parse of all of a
+      // company's runs (~20s on a busy company) no matter how small the limit.
+      // When a limit is requested we first resolve just the ordered run ids
+      // (id + created_at, served by heartbeat_runs_company_created_idx), then
+      // run the expensive projection over only those rows.
+      let rows;
+      if (limit) {
+        const limitedRuns = db
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(whereClause)
+          .orderBy(desc(heartbeatRuns.createdAt))
+          .limit(limit)
+          .as("limited_runs");
+        rows = await db
+          .select(projection)
+          .from(heartbeatRuns)
+          .innerJoin(limitedRuns, eq(heartbeatRuns.id, limitedRuns.id))
+          .orderBy(desc(heartbeatRuns.createdAt));
+      } else {
+        rows = await db
+          .select(projection)
+          .from(heartbeatRuns)
+          .where(whereClause)
+          .orderBy(desc(heartbeatRuns.createdAt));
+      }
       return rows.map((row) => {
         const {
           contextIssueId,

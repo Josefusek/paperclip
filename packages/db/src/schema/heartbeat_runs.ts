@@ -78,5 +78,12 @@ export const heartbeatRuns = pgTable(
       table.status,
       table.processStartedAt,
     ),
+    // NUT-4770: supports the company-scoped run list (ORDER BY created_at DESC
+    // LIMIT n) via a backward index scan with early termination, so the inner
+    // id lookup stays O(limit) instead of sorting every run for the company.
+    companyCreatedIdx: index("heartbeat_runs_company_created_idx").on(
+      table.companyId,
+      table.createdAt,
+    ),
   }),
 );
