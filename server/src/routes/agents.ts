@@ -52,7 +52,7 @@ import {
   workspaceOperationService,
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
-import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { assertBoard, assertBoardOrAgent, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectAgentAdapterWorkspaceCommandPaths,
@@ -3582,6 +3582,57 @@ export function agentRoutes(
         entityType: "heartbeat_run",
         entityId: run.id,
         details: { agentId: run.agentId },
+      });
+    }
+
+    res.json(run);
+  });
+
+  // Narrow-scope cancel for ops-hygiene watchdog agents: only allows cancelling
+  // runs that are stuck in queued status for more than 2 hours. Agents cannot
+  // use the board-only /cancel endpoint; this endpoint fills that gap without
+  // granting broad cancellation rights.
+  router.post("/heartbeat-runs/:runId/ops-hygiene-cancel", async (req, res) => {
+    assertBoardOrAgent(req);
+    const runId = req.params.runId as string;
+    const existing = await heartbeat.getRun(runId);
+    if (!existing) {
+      res.status(404).json({ error: "Heartbeat run not found" });
+      return;
+    }
+    assertCompanyAccess(req, existing.companyId);
+
+    if (existing.status !== "queued") {
+      res.status(403).json({
+        error: "ops-hygiene-cancel: run must be in queued status",
+        status: existing.status,
+      });
+      return;
+    }
+
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    if (new Date(existing.createdAt) > twoHoursAgo) {
+      res.status(403).json({
+        error: "ops-hygiene-cancel: run must be older than 2 hours",
+        createdAt: existing.createdAt,
+      });
+      return;
+    }
+
+    const run = await heartbeat.cancelRun(runId, "ops-hygiene: queued run stale >2h", {
+      errorCode: "ops_hygiene_stale_queued",
+    });
+
+    if (run) {
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId: run.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        action: "heartbeat.cancelled",
+        entityType: "heartbeat_run",
+        entityId: run.id,
+        details: { agentId: run.agentId, via: "ops-hygiene-cancel" },
       });
     }
 

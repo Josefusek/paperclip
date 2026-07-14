@@ -2902,6 +2902,17 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
+  path: "/api/heartbeat-runs/{runId}/ops-hygiene-cancel",
+  tags: ["runs"],
+  summary: "Cancel a stale queued heartbeat run (ops-hygiene, agent-accessible)",
+  description:
+    "Narrow-scope cancel available to agents. Only succeeds if the run has status=queued and was created more than 2 hours ago. Running or recent runs are rejected with 403.",
+  request: { params: z.object({ runId: z.string() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
+});
+
+registry.registerPath({
+  method: "post",
   path: "/api/heartbeat-runs/{runId}/watchdog-decisions",
   tags: ["runs"],
   summary: "Submit watchdog decisions for a run",

@@ -1781,4 +1781,119 @@ describe.sequential("agent permission routes", () => {
     expect(res.status).toBe(403);
     expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
   });
+
+  describe("ops-hygiene-cancel", () => {
+    const staleQueuedRun = {
+      id: "run-stale",
+      companyId,
+      agentId,
+      status: "queued",
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000), // 3h ago
+    };
+
+    it("allows an agent to cancel a stale queued run", async () => {
+      registerModuleMocks();
+      mockHeartbeatService.getRun.mockResolvedValue(staleQueuedRun);
+      mockHeartbeatService.cancelRun.mockResolvedValue({ ...staleQueuedRun, status: "cancelled" });
+
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        runId: "run-caller",
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post("/api/heartbeat-runs/run-stale/ops-hygiene-cancel").send({}),
+      );
+
+      expect(res.status).toBe(200);
+      expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith(
+        "run-stale",
+        "ops-hygiene: queued run stale >2h",
+        { errorCode: "ops_hygiene_stale_queued" },
+      );
+    });
+
+    it("rejects ops-hygiene-cancel when run is running (not queued)", async () => {
+      registerModuleMocks();
+      mockHeartbeatService.getRun.mockResolvedValue({ ...staleQueuedRun, status: "running" });
+
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        runId: "run-caller",
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post("/api/heartbeat-runs/run-stale/ops-hygiene-cancel").send({}),
+      );
+
+      expect(res.status).toBe(403);
+      expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    });
+
+    it("rejects ops-hygiene-cancel when run is too recent (< 2h)", async () => {
+      registerModuleMocks();
+      mockHeartbeatService.getRun.mockResolvedValue({
+        ...staleQueuedRun,
+        createdAt: new Date(Date.now() - 30 * 60 * 1000), // only 30m ago
+      });
+
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        runId: "run-caller",
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post("/api/heartbeat-runs/run-stale/ops-hygiene-cancel").send({}),
+      );
+
+      expect(res.status).toBe(403);
+      expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    });
+
+    it("rejects ops-hygiene-cancel for unauthenticated request", async () => {
+      registerModuleMocks();
+      mockHeartbeatService.getRun.mockResolvedValue(staleQueuedRun);
+
+      const app = await createApp({ type: "none" });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post("/api/heartbeat-runs/run-stale/ops-hygiene-cancel").send({}),
+      );
+
+      expect(res.status).toBe(401);
+      expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    });
+
+    it("rejects ops-hygiene-cancel for cross-company agent", async () => {
+      registerModuleMocks();
+      mockHeartbeatService.getRun.mockResolvedValue({
+        ...staleQueuedRun,
+        companyId: "33333333-3333-4333-8333-333333333333",
+      });
+
+      const app = await createApp({
+        type: "agent",
+        agentId,
+        companyId,
+        runId: "run-caller",
+        source: "agent_key",
+      });
+
+      const res = await requestApp(app, (baseUrl) =>
+        request(baseUrl).post("/api/heartbeat-runs/run-stale/ops-hygiene-cancel").send({}),
+      );
+
+      expect(res.status).toBe(403);
+      expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    });
+  });
 });
